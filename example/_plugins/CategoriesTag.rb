@@ -1,157 +1,103 @@
 # encoding: utf-8
 #
-# Jekyll categories pages generator
+# Jekyll categories list plugin
 # http://www.ekynoxe.com/
-# Version: 0.0.1 (2014-01-25)
+# https://github.com/ekynoxe/JekyllCategoriesTag
+# Version: 0.0.2 (2014-01-25)
 #
 # Copyright (c) 2014 Mathieu Davy - ekynoxe - http://ekynoxe.com/
 # Licensed under the MIT license
 # (http://www.opensource.org/licenses/mit-license.php)
 #
-# Initially based on https://github.com/mwotton/lambdamechanic-jekyll and
-#   modified to suit a different site and categories architecture
+# This plugin registers a liquid tag {% categories %} that will output
+# => a list of all categories your posts have in their YAML front matter
+#
+# You can pass an optional argument that will be the syntax used to
+# => output each category item, with placeholders for the category name
+# => and a category link built from the site's configuration value from
+# => your _config.yml file as one of those two syntaxes:
+#
+#       category_path: /categories
+#       category_path: /categories/:cat
+#
+# => The name place holder is [[name]]
+# => The link place holder is [[link]]
 #
 #
-# This plugin generates pages for each of the categories of your site, as
-#   defined in their YAML front matter.
-# If enabled through configuration, it will also generate the appropriate pagination
+# Examples of use:
 #
-# To enable category pages generation, add the following in your _config.yml
+# Print a comma separated string of all categories names
 #
-#     category_path: "categories/:cat"
-#
-# If you want to customise the numbered page name, you can use the following:
-# Default is "page:num"
-#
-#     category_page_path: "page:num"
-#
-# Customise those to suit your needs, but you need to keep the placeholders
-#   as they are:  ":cat" ad ":num"
-#
-# To enable pagination and define the number of posts per page, use:
-#
-#     paginate_categories: 4
-#
-# This plugin uses the standard Jekyll paginator, so you can also print
-#   pagination links by simply add the following in your
-#   category_index.html template:
+#       {% categories %}
 #
 #
-# {% if paginator.total_pages > 1 %}
-# <nav class="pagination">
-#   {% if paginator.previous_page_path %}
-#     <a class="button previous" href="{{ paginator.previous_page_path }}" title="Previous posts">previous </a>
-#   {% endif %}
-
-#   {% if paginator.next_page_path %}
-#     <a class="button next" href="{{ paginator.next_page_path }}" title="Next posts"> next</a>
-#   {% endif %}
-# </nav>
-# {% endif %}
+# Print an unordered list of categories links.
+#
+#       <ul>{% categories <li><a href="[[link]]">[[name]]</a></li> %}</ul>
+#
+#
+# Please note that the list will be alphabetically ordered anyway,
+# => the html output is up to you.
 
 module Jekyll
+  class CategoriesTag < Liquid::Tag
+    safe = true
 
-  class CategoryPagesGenerator < Generator
-    safe true
+    def initialize(tag_name, text, tokens)
+        super
 
-    # Generate category pages, paginated if necessary
-    #
-    # site - the Jekyll::Site object
-    def generate(site)
-      if enabled?(site)
-        site.categories.each do |category, posts|
-          paginate(site, category, posts)
+        # Defaulting output to a comma separated list
+        @syntax = "[[name]]"
+        @separator = ", "
+
+        # Override syntax and separator if provided
+        if !text.empty?
+            @syntax = text
+            @separator = ""
         end
-      end
     end
 
-    # Paginates each category's posts. Renders the index.html file into paginated
-    # directories, ie: page2/index.html, page3/index.html, etc and adds more
-    # site-wide data.
-    #
-    # site        - the Jekyll::Site object
-    # category    - the String category currently being processed
-    # posts       - an array of that category's posts
-    #
-    # {"paginator" => { "page" => <Number>,
-    #                   "per_page" => <Number>,
-    #                   "posts" => [<Post>],
-    #                   "total_posts" => <Number>,
-    #                   "total_pages" => <Number>,
-    #                   "previous_page" => <Number>,
-    #                   "previous_page_path" => <Url>,
-    #                   "next_page" => <Number>,
-    #                   "next_page_path" => <Url> }}
-    def paginate(site, category, posts)
+    def render(context)
+        out_list = []
+        site = context.registers[:site]
+        category_path = site.config['category_path']
+        # Ensuring leading slash on path
+        category_path = "/#{category_path}" unless category_path =~ /^\//
 
-      all_posts = posts.sort_by { |p| p.date }
-      all_posts.reverse!
+        # Sorting categories
+        cats = site.categories.sort do |a, b|
+            a[0].nil? ? -1 : b[0].nil? ? 1 : a[0] <=> b[0]
+        end
 
-      if CategoryPager.pagination_enabled?(site)
-        pages = CategoryPager.calculate_pages(all_posts, site.config['paginate_categories'].to_i)
-      else
-        pages = 1
-      end
+        cats.each do |cat, posts|
+            catSlug = getCategorySlug(cat)
+            cat_out = @syntax.dup
 
-      (1..pages).each do |num_page|
-        pager = CategoryPager.new(site, num_page, all_posts, category, pages)
+            if @syntax.include? "[[link]]" and category_path
 
-        page = CategoryPage.new(site, site.source, "_layouts", category)
-        page.dir = CategoryPager.paginate_path(site, num_page, category)
-        page.pager = pager
+                # If the category_path contains the key ":cat",
+                # => perform a replacement
+                if category_path =~ /:cat\/?/
+                    cat_path = category_path.gsub(/:cat\/?/, catSlug)
+                    cat_out.gsub!(/\[\[link\]\]/, "#{cat_path}/")
 
-        site.pages << page
-      end
+                # Otherwise simply append the category name
+                else
+                    cat_out.gsub!(/\[\[link\]\]/, "#{category_path}/#{catSlug}/")
+                end
+            end
+
+            if @syntax.include? "[[name]]"
+                cat_out.gsub!(/\[\[name\]\]/, cat)
+            end
+
+            out_list << cat_out
+        end
+
+        out_list.join(@separator)
     end
 
-    # Determine if category pages generation is enabled
-    #
-    # site - the Jekyll::Site object
-    #
-    # Returns true if the category_path config value is set
-    #   and if there are cateories, false otherwise.
-    def enabled?(site)
-      !site.config['category_path'].nil? &&
-       site.categories.size > 0
-    end
-  end
-
-  class CategoryPage < Page
-
-    # Initializes a new CategoryPage.
-    #
-    # site          - the Jekyll::Site object
-    # base          - the String path to the <source>
-    # category_dir  - the String path between <source> and the category folder
-    # category      - the String category currently being processed
-    def initialize(site, base, category_dir, category)
-      @site = site
-      @base = base
-      @dir  = category_dir
-      @name = 'index.html'
-
-      self.process(@name)
-      self.read_yaml(File.join(base, '_layouts'), 'category_index.html')
-
-      self.data['title'] = "#{category}"
-    end
-  end
-
-  class CategoryPager
-    attr_reader :page, :per_page, :posts, :total_posts, :total_pages,
-      :previous_page, :previous_page_path, :next_page_path, :next_page, :category
-
-    # Calculate the number of pages.
-    #
-    # all_posts - the Array of all Posts.
-    # per_page  - the Integer of entries per page.
-    #
-    # Returns the Integer number of pages.
-    def self.calculate_pages(all_posts, per_page)
-      (all_posts.size.to_f / per_page.to_i).ceil
-    end
-
-    def self.removeDiacritics (str)
+    def removeDiacritics (str)
       $defaultDiacriticsRemovalMap.each_with_index do |val, index|
         str = str.gsub(val['letters'], val['base'])
       end
@@ -159,7 +105,7 @@ module Jekyll
       return str
     end
 
-    def self.getCategorySlug (headline)
+    def getCategorySlug (headline)
       headline = removeDiacritics(headline);
       headline = headline.downcase
       headline = headline.gsub(/,/, '')
@@ -175,97 +121,6 @@ module Jekyll
 
       return headline;
      end
-
-    # Determine if category pagination is enabled
-    #
-    # site - the Jekyll::Site object
-    #
-    # Returns true if pagination is enabled and if there are
-    #   cateories, false otherwise.
-    def self.pagination_enabled?(site)
-      !site.config['paginate_categories'].nil? &&
-       site.categories.size > 0
-    end
-
-    # Static: Return the pagination path of the page
-    #
-    # site     - the Jekyll::Site object
-    # num_page - the Integer number of pages in the pagination
-    # category - the String category currently being processed
-    #
-    # Returns the pagination path as a string
-    def self.paginate_path(site, num_page, category)
-      return nil if num_page.nil?
-
-      format = site.config['category_path'].sub(':cat', getCategorySlug(category))
-      pagePath = site.config['category_page_path'] ? site.config['category_page_path'] : "page:num"
-
-      if num_page > 1
-        format = File.join(format, pagePath)
-        format = format.sub(':num', num_page.to_s)
-      end
-
-      ensure_leading_slash(format)
-    end
-
-    # Static: Return a String version of the input which has a leading slash.
-    #         If the input already has a forward slash in position zero, it will be
-    #         returned unchanged.
-    #
-    # path - a String path
-    #
-    # Returns the path with a leading slash
-    def self.ensure_leading_slash(path)
-      path[0..0] == "/" ? path : "/#{path}"
-    end
-
-    # Initialize a new Pager.
-    #
-    # site      - the Jekyll::Site object
-    # page      - the Integer page number.
-    # all_posts - the Array of all the site's Posts.
-    # category  - the category currently being processed. As a String
-    # num_pages - the Integer number of pages or nil if you'd like the number
-    #             of pages calculated.
-    def initialize(site, page, all_posts, category, num_pages = nil)
-
-      @category = category
-      @page = page
-      @per_page = site.config['paginate_categories'].to_i
-      @total_pages = num_pages || Pager.calculate_pages(all_posts, @per_page)
-
-      if @page > @total_pages
-        raise RuntimeError, "page number can't be greater than total pages: #{@page} > #{@total_pages}"
-      end
-
-      init = (@page - 1) * @per_page
-      offset = (init + @per_page - 1) >= all_posts.size ? all_posts.size : (init + @per_page - 1)
-
-      @total_posts = all_posts.size
-      @posts = all_posts[init..offset]
-      @previous_page = @page != 1 ? @page - 1 : nil
-      @previous_page_path = CategoryPager.paginate_path(site, @previous_page, category)
-      @next_page = @page != @total_pages ? @page + 1 : nil
-      @next_page_path = CategoryPager.paginate_path(site, @next_page, category)
-    end
-
-    # Convert this Pager's data to a Hash suitable for use by Liquid.
-    #
-    # Returns the Hash representation of this Pager.
-    def to_liquid
-      {
-        'page' => page,
-        'per_page' => per_page,
-        'posts' => posts,
-        'total_posts' => total_posts,
-        'total_pages' => total_pages,
-        'previous_page' => previous_page,
-        'previous_page_path' => previous_page_path,
-        'next_page' => next_page,
-        'next_page_path' => next_page_path,
-        'category' => category
-      }
-    end
   end
 end
 
@@ -355,3 +210,5 @@ $defaultDiacriticsRemovalMap = [
   {'base' => 'y','letters' => /[\u0079\u24E8\uFF59\u1EF3\u00FD\u0177\u1EF9\u0233\u1E8F\u00FF\u1EF7\u1E99\u1EF5\u01B4\u024F\u1EFF]/},
   {'base' => 'z','letters' => /[\u007A\u24E9\uFF5A\u017A\u1E91\u017C\u017E\u1E93\u1E95\u01B6\u0225\u0240\u2C6C\uA763]/}
 ]
+
+Liquid::Template.register_tag('categories', Jekyll::CategoriesTag)
